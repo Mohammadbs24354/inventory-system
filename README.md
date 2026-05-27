@@ -10,7 +10,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000
+Open http://localhost:3000 or NOW https://inventory-system-coral-ten.vercel.app/login (vercel)
 
 ## Demo Accounts
 
