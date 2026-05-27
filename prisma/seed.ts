@@ -18,10 +18,10 @@ async function main() {
     create: { id: "wh-secondary", name: "Secondary Warehouse", location: "Building B, Floor 2" },
   });
 
-  // Users
+  // Users — always update password to ensure correct hash
   const superAdmin = await prisma.user.upsert({
     where: { email: "superadmin@inventory.com" },
-    update: {},
+    update: { password: hash("superadmin123"), role: "SUPER_ADMIN" },
     create: {
       id: "user-superadmin",
       name: "Super Admin",
@@ -33,7 +33,7 @@ async function main() {
 
   const admin = await prisma.user.upsert({
     where: { email: "admin@inventory.com" },
-    update: {},
+    update: { password: hash("admin123"), role: "ADMIN" },
     create: {
       id: "user-admin",
       name: "Admin User",
@@ -45,7 +45,7 @@ async function main() {
 
   const employee = await prisma.user.upsert({
     where: { email: "employee@inventory.com" },
-    update: {},
+    update: { password: hash("employee123"), role: "EMPLOYEE" },
     create: {
       id: "user-employee",
       name: "Employee User",
@@ -57,7 +57,7 @@ async function main() {
 
   const customer = await prisma.user.upsert({
     where: { email: "customer@inventory.com" },
-    update: {},
+    update: { password: hash("customer123"), role: "CUSTOMER" },
     create: {
       id: "user-customer",
       name: "Customer User",
