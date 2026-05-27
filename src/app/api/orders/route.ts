@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { getStore, uid } from "@/lib/store";
 import { requireAuth } from "@/lib/api-helpers";
 
 export async function GET(_req: NextRequest) {
@@ -8,66 +8,56 @@ export async function GET(_req: NextRequest) {
 
   const { session } = auth;
   const isStaff = ["SUPER_ADMIN", "ADMIN", "EMPLOYEE"].includes(session!.user.role);
+  const store = getStore();
 
-  const orders = await prisma.order.findMany({
-    where: isStaff ? {} : { customerId: session!.user.id },
-    include: {
-      customer: { select: { id: true, name: true, email: true } },
-      orderItems: {
-        include: { product: { select: { id: true, name: true, sku: true } } },
-      },
-    },
-    orderBy: { createdAt: "desc" },
+  const orders = isStaff ? store.orders : store.orders.filter((o) => o.customerId === session!.user.id);
+
+  const result = [...orders].reverse().map((o) => {
+    const customer = store.users.find((u) => u.id === o.customerId);
+    const orderItems = store.orderItems.filter((i) => i.orderId === o.id).map((i) => {
+      const product = store.products.find((p) => p.id === i.productId);
+      return { ...i, product: product ? { id: product.id, name: product.name, sku: product.sku } : null };
+    });
+    return { ...o, customer: customer ? { id: customer.id, name: customer.name, email: customer.email } : null, orderItems };
   });
 
-  return NextResponse.json(orders);
+  return NextResponse.json(result);
 }
 
 export async function POST(req: NextRequest) {
   const auth = await requireAuth();
   if (auth.error) return auth.error;
 
-  const body = await req.json();
-  const { items } = body as { items: { productId: string; quantity: number }[] };
-
-  if (!items || items.length === 0) {
+  const { items } = await req.json() as { items: { productId: string; quantity: number }[] };
+  if (!items || items.length === 0)
     return NextResponse.json({ error: "No items in order" }, { status: 400 });
-  }
 
-  // Fetch products and validate stock
-  const productIds = items.map((i) => i.productId);
-  const products = await prisma.product.findMany({ where: { id: { in: productIds } } });
+  const store = getStore();
+  const products = items.map((i) => store.products.find((p) => p.id === i.productId));
 
-  for (const item of items) {
-    const product = products.find((p) => p.id === item.productId);
-    if (!product) return NextResponse.json({ error: `Product ${item.productId} not found` }, { status: 404 });
-    if (product.quantity < item.quantity) {
+  for (let i = 0; i < items.length; i++) {
+    const product = products[i];
+    if (!product) return NextResponse.json({ error: `Product ${items[i].productId} not found` }, { status: 404 });
+    if (product.quantity < items[i].quantity)
       return NextResponse.json({ error: `Insufficient stock for ${product.name}` }, { status: 400 });
-    }
   }
 
   const totalPrice = items.reduce((sum, item) => {
-    const product = products.find((p) => p.id === item.productId)!;
-    return sum + product.price * item.quantity;
+    const p = products.find((p) => p?.id === item.productId)!;
+    return sum + p.price * item.quantity;
   }, 0);
 
-  const order = await prisma.order.create({
-    data: {
-      customerId: auth.session!.user.id,
-      totalPrice,
-      status: "PENDING",
-      orderItems: {
-        create: items.map((item) => {
-          const product = products.find((p) => p.id === item.productId)!;
-          return { productId: item.productId, quantity: item.quantity, price: product.price };
-        }),
-      },
-    },
-    include: {
-      orderItems: { include: { product: true } },
-      customer: { select: { id: true, name: true } },
-    },
+  const now = new Date().toISOString();
+  const order = { id: uid(), customerId: auth.session!.user.id, status: "PENDING", totalPrice, createdAt: now, updatedAt: now };
+  store.orders.push(order);
+
+  const orderItems = items.map((item) => {
+    const p = products.find((p) => p?.id === item.productId)!;
+    const oi = { id: uid(), orderId: order.id, productId: item.productId, quantity: item.quantity, price: p.price };
+    store.orderItems.push(oi);
+    return { ...oi, product: { id: p.id, name: p.name, sku: p.sku } };
   });
 
-  return NextResponse.json(order, { status: 201 });
+  const customer = store.users.find((u) => u.id === order.customerId);
+  return NextResponse.json({ ...order, orderItems, customer: customer ? { id: customer.id, name: customer.name } : null }, { status: 201 });
 }

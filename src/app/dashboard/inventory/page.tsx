@@ -1,50 +1,55 @@
 "use client";
 import { useEffect, useState } from "react";
-import { ArrowUp, ArrowDown, RefreshCw, Search, Loader2 } from "lucide-react";
+import { ArrowUp, ArrowDown, SlidersHorizontal, Search, Loader2, PackageCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { formatDate } from "@/lib/utils";
 
-const typeIcons = { IN: <ArrowUp className="h-4 w-4 text-green-600" />, OUT: <ArrowDown className="h-4 w-4 text-red-600" />, ADJUST: <RefreshCw className="h-4 w-4 text-blue-600" /> };
-const typeBadge = { IN: "success" as const, OUT: "danger" as const, ADJUST: "info" as const };
+type MoveType = "IN" | "OUT" | "ADJUST";
+
+const typeConfig = {
+  IN:     { label: "Add Stock",    icon: <ArrowUp   className="h-4 w-4" />, color: "bg-green-600 hover:bg-green-700", preview: (cur: number, qty: number) => cur + qty },
+  OUT:    { label: "Remove Stock", icon: <ArrowDown className="h-4 w-4" />, color: "bg-red-600   hover:bg-red-700",   preview: (cur: number, qty: number) => cur - qty },
+  ADJUST: { label: "Set to exact", icon: <SlidersHorizontal className="h-4 w-4" />, color: "bg-blue-600  hover:bg-blue-700",  preview: (_cur: number, qty: number) => qty },
+};
 
 export default function InventoryPage() {
+  const [products,  setProducts]  = useState<any[]>([]);
   const [movements, setMovements] = useState<any[]>([]);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading,   setLoading]   = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [skuCheckResult, setSkuCheckResult] = useState<any>(null);
-  const [needsCreate, setNeedsCreate] = useState(false);
-  const [success, setSuccess] = useState("");
-  const [error, setError] = useState("");
-
-  const [form, setForm] = useState({
-    sku: "", quantity: "", type: "IN", reason: "",
-    name: "", price: "", warehouseId: "",
-  });
+  const [search,    setSearch]    = useState("");
+  const [selected,  setSelected]  = useState<any>(null);
+  const [moveType,  setMoveType]  = useState<MoveType>("IN");
+  const [quantity,  setQuantity]  = useState("");
+  const [reason,    setReason]    = useState("");
+  const [success,   setSuccess]   = useState("");
+  const [error,     setError]     = useState("");
 
   useEffect(() => {
     Promise.all([
+      fetch("/api/products").then((r) => r.json()),
       fetch("/api/inventory/movements").then((r) => r.json()),
-      fetch("/api/warehouses").then((r) => r.json()),
-    ]).then(([m, w]) => { setMovements(m); setWarehouses(w); setLoading(false); });
+    ]).then(([p, m]) => { setProducts(p); setMovements(m); setLoading(false); });
   }, []);
 
-  async function checkSku() {
-    if (!form.sku) return;
-    const res = await fetch(`/api/products?search=${encodeURIComponent(form.sku)}`);
-    const products = await res.json();
-    const found = products.find((p: any) => p.sku === form.sku);
-    setSkuCheckResult(found || null);
-    setNeedsCreate(false);
-  }
+  const filtered = search.length > 0
+    ? products.filter((p) =>
+        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        p.sku.toLowerCase().includes(search.toLowerCase())
+      )
+    : products;
+
+  const qty = Number(quantity) || 0;
+  const newStock = selected ? typeConfig[moveType].preview(selected.quantity, qty) : 0;
+  const stockInvalid = selected && qty > 0 && newStock < 0;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!selected || qty <= 0) return;
     setSubmitting(true);
     setError("");
     setSuccess("");
@@ -52,28 +57,21 @@ export default function InventoryPage() {
     const res = await fetch("/api/inventory", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(form),
+      body: JSON.stringify({ sku: selected.sku, quantity: qty, type: moveType, reason }),
     });
 
     const data = await res.json();
     setSubmitting(false);
 
-    if (!res.ok) {
-      if (data.action === "create_required") {
-        setNeedsCreate(true);
-        setError("Product not found. Fill in the details below to create it.");
-      } else {
-        setError(data.error);
-      }
-      return;
-    }
+    if (!res.ok) { setError(data.error); return; }
 
-    setSuccess(`Stock updated: ${data.product.name} — now ${data.product.quantity} units`);
-    setForm({ sku: "", quantity: "", type: "IN", reason: "", name: "", price: "", warehouseId: "" });
-    setSkuCheckResult(null);
-    setNeedsCreate(false);
+    setSuccess(`Done! ${data.product.name} — stock is now ${data.product.quantity} units`);
+    setSelected({ ...selected, quantity: data.product.quantity });
+    setQuantity("");
+    setReason("");
 
-    // Refresh movements
+    // update local product list + movements
+    setProducts((prev) => prev.map((p) => p.id === data.product.id ? { ...p, quantity: data.product.quantity } : p));
     const mRes = await fetch("/api/inventory/movements");
     setMovements(await mRes.json());
   }
@@ -83,113 +81,160 @@ export default function InventoryPage() {
       <h1 className="text-2xl font-bold">Inventory Management</h1>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* SKU Input Form */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Update Stock via SKU</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {error && <div className="rounded-md bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</div>}
-              {success && <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-700">{success}</div>}
 
-              <div className="space-y-1">
-                <Label>SKU</Label>
-                <div className="flex gap-2">
-                  <Input value={form.sku} onChange={(e) => { setForm({ ...form, sku: e.target.value }); setSkuCheckResult(null); setNeedsCreate(false); }} placeholder="DELL-123" />
-                  <Button type="button" variant="outline" onClick={checkSku} disabled={!form.sku}>
-                    <Search className="h-4 w-4" />
-                  </Button>
-                </div>
+        {/* Left: product picker + form */}
+        <div className="space-y-4">
+
+          {/* Step 1 — Pick product */}
+          <Card>
+            <CardHeader><CardTitle className="text-base">1 · Select a Product</CardTitle></CardHeader>
+            <CardContent className="space-y-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                <Input
+                  className="pl-9"
+                  placeholder="Search by name or SKU…"
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setSelected(null); setSuccess(""); setError(""); }}
+                />
               </div>
 
-              {skuCheckResult && (
-                <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm text-blue-800">
-                  Found: <strong>{skuCheckResult.name}</strong> — Current stock: <strong>{skuCheckResult.quantity}</strong>
+              {loading ? (
+                <p className="text-sm text-gray-400 text-center py-4">Loading…</p>
+              ) : search && filtered.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">No products found</p>
+              ) : search ? (
+                <ul className="divide-y rounded-md border max-h-48 overflow-y-auto">
+                  {filtered.map((p) => (
+                    <li
+                      key={p.id}
+                      onClick={() => { setSelected(p); setSearch(""); setSuccess(""); setError(""); }}
+                      className={`flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-gray-50 text-sm ${selected?.id === p.id ? "bg-blue-50" : ""}`}
+                    >
+                      <div>
+                        <span className="font-medium">{p.name}</span>
+                        <span className="ml-2 text-gray-400 text-xs">{p.sku}</span>
+                      </div>
+                      <span className={`font-semibold ${p.quantity < 10 ? "text-red-600" : "text-gray-700"}`}>
+                        {p.quantity} units
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              {selected && (
+                <div className="flex items-center gap-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
+                  <PackageCheck className="h-5 w-5 text-blue-600 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-blue-900">{selected.name}</p>
+                    <p className="text-xs text-blue-600">SKU: {selected.sku} · Current stock: <strong>{selected.quantity}</strong></p>
+                  </div>
+                  <button onClick={() => { setSelected(null); setSuccess(""); setError(""); }} className="text-xs text-blue-500 hover:underline">Change</button>
                 </div>
               )}
+            </CardContent>
+          </Card>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label>Movement Type</Label>
-                  <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="IN">Stock In</SelectItem>
-                      <SelectItem value="OUT">Stock Out</SelectItem>
-                      <SelectItem value="ADJUST">Adjust</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <Label>Quantity</Label>
-                  <Input type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} placeholder="0" />
-                </div>
-              </div>
+          {/* Step 2 — Operation (only shown when product selected) */}
+          {selected && (
+            <Card>
+              <CardHeader><CardTitle className="text-base">2 · Choose Operation</CardTitle></CardHeader>
+              <CardContent>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  {error   && <div className="rounded-md bg-red-50   border border-red-200   px-3 py-2 text-sm text-red-700">{error}</div>}
+                  {success && <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-700">{success}</div>}
 
-              <div className="space-y-1">
-                <Label>Reason</Label>
-                <Input value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} placeholder="Restock, sale, correction..." />
-              </div>
+                  {/* Type selector */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["IN", "OUT", "ADJUST"] as MoveType[]).map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setMoveType(t)}
+                        className={`flex flex-col items-center gap-1 rounded-lg border-2 py-3 text-xs font-medium transition-all ${
+                          moveType === t
+                            ? "border-blue-500 bg-blue-50 text-blue-700"
+                            : "border-gray-200 text-gray-500 hover:border-gray-300"
+                        }`}
+                      >
+                        {typeConfig[t].icon}
+                        {typeConfig[t].label}
+                      </button>
+                    ))}
+                  </div>
 
-              {needsCreate && (
-                <div className="border border-dashed border-orange-300 rounded-md p-3 space-y-3 bg-orange-50">
-                  <p className="text-sm font-medium text-orange-800">New product details</p>
+                  {/* Quantity */}
                   <div className="space-y-1">
-                    <Label>Product Name</Label>
-                    <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Product Name" />
+                    <Label>Quantity</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={quantity}
+                      onChange={(e) => setQuantity(e.target.value)}
+                      placeholder="Enter quantity"
+                    />
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label>Price ($)</Label>
-                      <Input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
+
+                  {/* Live preview */}
+                  {qty > 0 && (
+                    <div className={`rounded-md border px-3 py-2 text-sm ${stockInvalid ? "border-red-200 bg-red-50 text-red-700" : "border-gray-200 bg-gray-50 text-gray-700"}`}>
+                      {moveType === "IN"     && <span>{selected.quantity} + {qty} = <strong>{newStock}</strong> units</span>}
+                      {moveType === "OUT"    && <span>{selected.quantity} − {qty} = <strong className={newStock < 0 ? "text-red-600" : ""}>{newStock}</strong> units</span>}
+                      {moveType === "ADJUST" && <span>Set stock to <strong>{newStock}</strong> units</span>}
+                      {stockInvalid && <span className="ml-2 font-medium">— not enough stock!</span>}
                     </div>
-                    <div className="space-y-1">
-                      <Label>Warehouse</Label>
-                      <Select value={form.warehouseId} onValueChange={(v) => setForm({ ...form, warehouseId: v })}>
-                        <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
-                        <SelectContent>
-                          {warehouses.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </div>
+                  )}
+
+                  {/* Reason */}
+                  <div className="space-y-1">
+                    <Label>Reason <span className="text-gray-400 font-normal">(optional)</span></Label>
+                    <Input
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="e.g. Restock, sale, damaged goods…"
+                    />
                   </div>
-                </div>
-              )}
 
-              <Button type="submit" className="w-full" disabled={submitting}>
-                {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                {submitting ? "Processing..." : "Update Stock"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+                  <Button
+                    type="submit"
+                    className={`w-full text-white ${typeConfig[moveType].color}`}
+                    disabled={submitting || qty <= 0 || !!stockInvalid}
+                  >
+                    {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {submitting ? "Saving…" : `${typeConfig[moveType].label} (${qty || 0})`}
+                  </Button>
+                </form>
+              </CardContent>
+            </Card>
+          )}
+        </div>
 
-        {/* Recent movements */}
+        {/* Right: movement history */}
         <Card>
-          <CardHeader>
-            <CardTitle>Recent Movements</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>Movement History</CardTitle></CardHeader>
           <CardContent>
             {loading ? (
-              <div className="space-y-3">
-                {[...Array(5)].map((_, i) => <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />)}
-              </div>
+              <div className="space-y-3">{[...Array(6)].map((_, i) => <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />)}</div>
             ) : movements.length === 0 ? (
               <p className="text-sm text-gray-500 text-center py-8">No movements recorded</p>
             ) : (
-              <div className="space-y-3 max-h-96 overflow-y-auto">
+              <div className="space-y-2 max-h-[520px] overflow-y-auto pr-1">
                 {movements.map((m) => (
-                  <div key={m.id} className="flex items-center gap-3 py-2 border-b last:border-0">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100 shrink-0">
-                      {typeIcons[m.type as keyof typeof typeIcons]}
+                  <div key={m.id} className="flex items-center gap-3 rounded-lg border px-3 py-2">
+                    <div className={`flex h-8 w-8 items-center justify-center rounded-full shrink-0 ${m.type === "IN" ? "bg-green-100" : m.type === "OUT" ? "bg-red-100" : "bg-blue-100"}`}>
+                      {m.type === "IN"  ? <ArrowUp    className="h-4 w-4 text-green-600" /> :
+                       m.type === "OUT" ? <ArrowDown  className="h-4 w-4 text-red-600"   /> :
+                                          <SlidersHorizontal className="h-4 w-4 text-blue-600" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{m.product.name}</p>
-                      <p className="text-xs text-gray-500">{m.reason} · {m.createdBy.name}</p>
+                      <p className="text-sm font-medium truncate">{m.product?.name}</p>
+                      <p className="text-xs text-gray-500">{m.reason} · {m.createdBy?.name}</p>
                     </div>
                     <div className="text-right shrink-0">
-                      <Badge variant={typeBadge[m.type as keyof typeof typeBadge]}>{m.type} {m.quantity}</Badge>
+                      <Badge variant={m.type === "IN" ? "success" : m.type === "OUT" ? "danger" : "info"}>
+                        {m.type === "IN" ? "+" : m.type === "OUT" ? "−" : "="}{m.quantity}
+                      </Badge>
                       <p className="text-xs text-gray-400 mt-0.5">{formatDate(m.createdAt)}</p>
                     </div>
                   </div>
@@ -198,6 +243,7 @@ export default function InventoryPage() {
             )}
           </CardContent>
         </Card>
+
       </div>
     </div>
   );

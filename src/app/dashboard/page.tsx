@@ -95,8 +95,8 @@ export default function DashboardPage() {
                           {movementIcon[m.type as keyof typeof movementIcon]}
                         </div>
                         <div>
-                          <p className="text-sm font-medium">{m.product.name}</p>
-                          <p className="text-xs text-gray-500">{m.reason} · {m.createdBy.name}</p>
+                          <p className="text-sm font-medium">{m.product?.name ?? "Unknown"}</p>
+                          <p className="text-xs text-gray-500">{m.reason} · {m.createdBy?.name ?? ""}</p>
                         </div>
                       </div>
                       <div className="text-right">
